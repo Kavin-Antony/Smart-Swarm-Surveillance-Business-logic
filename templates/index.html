@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swarm Surveillance Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a; /* Slate 900 */
+            --glass-bg: rgba(30, 41, 59, 0.7); /* Slate 800 with opacity */
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --accent-color: #38bdf8; /* Light blue */
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --box-color: #10b981; /* Emerald 500 for boxes */
+        }
+        
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+            background: linear-gradient(135deg, #020617 0%, #0f172a 100%);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        header {
+            width: 100%;
+            padding: 20px 40px;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--glass-border);
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        h1 span {
+            color: var(--accent-color);
+        }
+
+        .main-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            max-width: 1280px;
+            padding: 40px 20px;
+            box-sizing: border-box;
+            gap: 30px;
+        }
+
+        /* Video Container */
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            max-width: 1024px;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            background: #000;
+            border: 1px solid var(--glass-border);
+        }
+
+        #video-feed {
+            display: block;
+            width: 100%;
+            height: auto;
+            object-fit: contain;
+        }
+
+        #boxes-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Let clicks pass through */
+        }
+
+        .bounding-box {
+            position: absolute;
+            border: 2px solid var(--box-color);
+            background: rgba(16, 185, 129, 0.1);
+            box-sizing: border-box;
+            border-radius: 4px;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+            transition: left 0.1s linear, top 0.1s linear, width 0.1s linear, height 0.1s linear;
+        }
+
+        .bounding-box::after {
+            content: 'Person';
+            position: absolute;
+            top: -24px;
+            left: -2px;
+            background: var(--box-color);
+            color: #fff;
+            padding: 2px 8px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            border-radius: 4px 4px 4px 0;
+        }
+
+        /* Metrics Display */
+        .metrics-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 24px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            width: 100%;
+            max-width: 800px;
+            flex-wrap: wrap;
+        }
+
+        .metric-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .metric-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+
+        .metric-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent-color);
+            transition: color 0.3s ease;
+        }
+
+        .importance-group {
+            border-left: 2px solid var(--glass-border);
+            padding-left: 20px;
+        }
+
+        .importance-group .metric-value {
+            color: #f59e0b; /* Amber */
+        }
+
+        .arrow {
+            color: var(--text-muted);
+            font-size: 1.5rem;
+            margin: 0 10px;
+        }
+
+        /* Status indicator */
+        .status-dot {
+            height: 10px;
+            width: 10px;
+            background-color: #10b981;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1><span>Swarm</span> Node Vision</h1>
+        <div><span class="status-dot"></span><span id="node-id-display">Node Initializing...</span></div>
+    </header>
+
+    <main class="main-content">
+        <!-- Live Metrics Overlay -->
+        <div class="metrics-card">
+            <div class="metric-group">
+                <span class="metric-label">Persons</span>
+                <span class="metric-value" id="val-persons">0</span>
+            </div>
+            <div class="metric-group">
+                <span class="metric-label">Confidence</span>
+                <span class="metric-value" id="val-conf">0.000</span>
+            </div>
+            <div class="metric-group">
+                <span class="metric-label">Motion</span>
+                <span class="metric-value" id="val-motion">0.000</span>
+            </div>
+            
+            <div class="arrow">→</div>
+
+            <div class="metric-group importance-group">
+                <span class="metric-label">Importance</span>
+                <span class="metric-value" id="val-importance">0.0000</span>
+            </div>
+        </div>
+
+        <!-- Video Player with Overlay -->
+        <div class="video-wrapper">
+            <img id="video-feed" src="/video_feed" alt="Live Camera Feed">
+            <div id="boxes-container"></div>
+        </div>
+    </main>
+
+    <script>
+        const boxesContainer = document.getElementById('boxes-container');
+        const videoElement = document.getElementById('video-feed');
+        
+        // Caching previously rendered boxes to minimize DOM manipulations
+        // if YOLO hasn't updated the frame yet.
+        let lastBoxesStr = "";
+
+        function updateBoxes(boxes, dims) {
+            const boxesStr = JSON.stringify(boxes);
+            if (boxesStr === lastBoxesStr) {
+                // No update needed
+                return;
+            }
+            lastBoxesStr = boxesStr;
+
+            // Clear container
+            boxesContainer.innerHTML = '';
+            
+            if (!dims || dims[0] === 0 || dims[1] === 0 || !boxes || boxes.length === 0) return;
+            
+            const originalWidth = dims[0];
+            const originalHeight = dims[1];
+
+            const rect = videoElement.getBoundingClientRect();
+            const renderedWidth = rect.width;
+            const renderedHeight = rect.height;
+            
+            if (renderedWidth === 0 || renderedHeight === 0) return;
+
+            const videoRatio = originalWidth / originalHeight;
+            const elementRatio = renderedWidth / renderedHeight;
+            
+            let actualVidWidth = renderedWidth;
+            let actualVidHeight = renderedHeight;
+            let topOffset = 0;
+            let leftOffset = 0;
+
+            if (videoRatio > elementRatio) {
+                actualVidHeight = renderedWidth / videoRatio;
+                topOffset = (renderedHeight - actualVidHeight) / 2;
+            } else {
+                actualVidWidth = renderedHeight * videoRatio;
+                leftOffset = (renderedWidth - actualVidWidth) / 2;
+            }
+
+            const scaleX = actualVidWidth / originalWidth;
+            const scaleY = actualVidHeight / originalHeight;
+
+            boxes.forEach(box => {
+                const div = document.createElement('div');
+                div.className = 'bounding-box';
+                
+                const left = leftOffset + (box.x1 * scaleX);
+                const top = topOffset + (box.y1 * scaleY);
+                const width = (box.x2 - box.x1) * scaleX;
+                const height = (box.y2 - box.y1) * scaleY;
+
+                div.style.left = `${left}px`;
+                div.style.top = `${top}px`;
+                div.style.width = `${width}px`;
+                div.style.height = `${height}px`;
+
+                boxesContainer.appendChild(div);
+            });
+        }
+
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/api/status');
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    document.getElementById('node-id-display').textContent = `Node: ${data.node_id}`;
+                    document.getElementById('val-persons').textContent = data.person_count;
+                    document.getElementById('val-conf').textContent = data.avg_confidence.toFixed(3);
+                    document.getElementById('val-motion').textContent = data.motion_factor.toFixed(3);
+                    document.getElementById('val-importance').textContent = data.importance.toFixed(4);
+
+                    const impGroup = document.querySelector('.importance-group .metric-value');
+                    if (data.importance > 0.7) {
+                        impGroup.style.color = '#ef4444'; // Red
+                    } else if (data.importance > 0.3) {
+                        impGroup.style.color = '#f59e0b'; // Amber
+                    } else {
+                        impGroup.style.color = '#10b981'; // Green
+                    }
+
+                    if (data.boxes && data.frame_dims) {
+                        updateBoxes(data.boxes, data.frame_dims);
+                    }
+                }
+            } catch (error) {
+                console.error("Error fetching node status:", error);
+            }
+        }
+
+        // Poll every 100ms
+        setInterval(fetchStatus, 100);
+        
+        window.addEventListener('resize', () => {
+            lastBoxesStr = ""; // force redraw on next tick
+            boxesContainer.innerHTML = '';
+        });
+    </script>
+</body>
+</html>
