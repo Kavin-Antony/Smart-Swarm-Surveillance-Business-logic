@@ -1,0 +1,33 @@
+###############################################
+# Global settings
+
+# Enable HTTP API for querying and controlling the server.
+api: yes
+apiAddress: 127.0.0.1:9997
+
+###############################################
+# RTSP settings
+
+rtsp: yes
+protocols: [udp, tcp]
+rtspAddress: :8554
+# rtpAddress: :8000
+# rtcpAddress: :8001
+
+###############################################
+# RTMP settings
+rtmp: yes
+rtmpAddress: :1935
+
+###############################################
+# WebRTC settings
+webrtc: yes
+webrtcAddress: :8889
+
+###############################################
+# Path settings
+
+paths:
+  # Catch-all path setting
+  all:
+    # Optional security configs can go here

@@ -90,10 +90,15 @@
     python node.py
   '';
 
+  scripts.mtx.exec = ''
+    echo "Starting MediaMTX server..."
+    mediamtx mediamtx.yml
+  '';
+
   enterShell = ''
     echo ""
     echo "╔══════════════════════════════════════════╗"
-    echo "║  Swarm Surveillance Edge Node — devenv  ║"
+    echo "║  Swarm Surveillance Edge Node — devenv   ║"
     echo "╚══════════════════════════════════════════╝"
 
     if [ -d ".venv" ]; then
@@ -108,6 +113,7 @@
     echo "  Commands:"
     echo "    setup  — install Python dependencies"
     echo "    run    — start this node (reads .env if present)"
+    echo "    mtx    — start the MediaMTX video server"
     echo ""
   '';
 }

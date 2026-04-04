@@ -32,6 +32,7 @@ import time
 import json
 import logging
 import threading
+import subprocess
 from datetime import datetime
 
 # ===========================================================================
@@ -148,6 +149,10 @@ class SharedState:
         self.latest_frame: bytes = b''
         self.boxes: list = []
         self.frame_dims: tuple = (0, 0)
+        
+        # ── Stream Control ─────────────────────────────────────────────
+        self.is_streaming: bool = False
+        self.ffmpeg_proc: subprocess.Popen | None = None
 
 
 state = SharedState()
@@ -280,6 +285,19 @@ def video_processing_thread():
         # Always update latest_frame so the stream is continuous
         with state.lock:
             state.latest_frame = frame_bytes
+            
+            # Pipe to FFmpeg if streaming is active
+            if state.is_streaming and state.ffmpeg_proc is not None:
+                if state.ffmpeg_proc.poll() is None:
+                    try:
+                        state.ffmpeg_proc.stdin.write(frame_bytes)
+                    except Exception as e:
+                        log.error("[Video] Failed to write to FFmpeg stdin: %s", e)
+                        state.is_streaming = False
+                else:
+                    log.warning("[Video] FFmpeg process died unexpectedly.")
+                    state.is_streaming = False
+                    state.ffmpeg_proc = None
 
     cap.release()
 
@@ -524,6 +542,7 @@ def _build_status() -> dict:
             "stream_source":       state.stream_source,
             "boxes":               state.boxes,
             "frame_dims":          state.frame_dims,
+            "is_streaming":        state.is_streaming,
         }
 
 
@@ -624,6 +643,62 @@ def generate_frames():
 def video_feed():
     """Serves the MJPEG video feed."""
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route("/api/stream/start", methods=["POST"])
+def stream_start():
+    with state.lock:
+        if state.is_streaming:
+            return jsonify({"status": "already_streaming"}), 400
+            
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "image2pipe",
+            "-vcodec", "mjpeg",
+            "-r", "25",
+            "-i", "-",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-b:v", "2M",
+            "-f", "rtsp",
+            "rtsp://localhost:8554/webcam"
+        ]
+        
+        try:
+            state.ffmpeg_proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            state.is_streaming = True
+            log.info("[Stream] Started FFmpeg stream to MediaMTX on rtsp://localhost:8554/webcam")
+            return jsonify({"status": "started"}), 200
+        except Exception as e:
+            log.error("[Stream] Failed to start FFmpeg: %s", e)
+            return jsonify({"error": str(e)}), 500
+
+@app.route("/api/stream/stop", methods=["POST"])
+def stream_stop():
+    with state.lock:
+        if not state.is_streaming or state.ffmpeg_proc is None:
+            return jsonify({"status": "not_streaming"}), 400
+            
+        try:
+            state.ffmpeg_proc.stdin.close()
+            state.ffmpeg_proc.terminate()
+            state.ffmpeg_proc.wait(timeout=3)
+        except Exception as e:
+            log.warning("[Stream] Issue killing FFmpeg: %s", e)
+            if state.ffmpeg_proc:
+                state.ffmpeg_proc.kill()
+        finally:
+            state.is_streaming = False
+            state.ffmpeg_proc = None
+            log.info("[Stream] Stopped FFmpeg stream")
+            
+        return jsonify({"status": "stopped"}), 200
 
 
 @app.route("/metrics", methods=["GET"])
