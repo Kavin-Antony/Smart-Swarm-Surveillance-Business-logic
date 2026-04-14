@@ -302,6 +302,11 @@
                 </div>
 
                 <div class="field">
+                    <label for="mqtt-port">MQTT Port</label>
+                    <input id="mqtt-port" name="mqtt_port" type="number" min="1" max="65535" value="1883" required>
+                </div>
+
+                <div class="field">
                     <label for="source-type">Source Type</label>
                     <select id="source-type" name="source_type">
                         <option value="webcam">Webcam</option>
@@ -455,6 +460,7 @@
             const payload = {
                 node_id: String(formData.get('node_id') || '').trim(),
                 mqtt_broker: String(formData.get('mqtt_broker') || '').trim(),
+                mqtt_port: Number(formData.get('mqtt_port') || 1883),
                 source_type: String(formData.get('source_type') || 'webcam').trim().toLowerCase(),
                 webcam_index: Number(formData.get('webcam_index') || 0),
                 rtsp_url: String(formData.get('rtsp_url') || '').trim()
@@ -498,7 +504,7 @@
                     data.started ? `Node: ${data.node_id}` : 'Waiting for startup configuration';
 
                 document.getElementById('meta-node').textContent = data.node_id;
-                document.getElementById('meta-mqtt').textContent = data.mqtt_broker;
+                document.getElementById('meta-mqtt').textContent = `${data.mqtt_broker}:${data.mqtt_port}`;
                 document.getElementById('meta-source').textContent = `${data.source_type} (${data.stream_source})`;
                 document.getElementById('meta-quality').textContent = data.quality;
 
