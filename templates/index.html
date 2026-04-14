@@ -7,71 +7,221 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-color: #0f172a; /* Slate 900 */
-            --glass-bg: rgba(30, 41, 59, 0.7); /* Slate 800 with opacity */
-            --glass-border: rgba(255, 255, 255, 0.1);
-            --accent-color: #38bdf8; /* Light blue */
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --box-color: #10b981; /* Emerald 500 for boxes */
+            --bg: #071126;
+            --bg-soft: #0d1b36;
+            --card: rgba(12, 28, 56, 0.82);
+            --card-border: rgba(99, 130, 187, 0.34);
+            --text: #f2f7ff;
+            --muted: #9cb3d9;
+            --accent: #33d1ff;
+            --success: #17dba5;
+            --danger: #ff5d6f;
+            --box: #1de9b6;
         }
-        
+
+        * {
+            box-sizing: border-box;
+        }
+
         body {
             margin: 0;
-            padding: 0;
             font-family: 'Outfit', sans-serif;
-            background: linear-gradient(135deg, #020617 0%, #0f172a 100%);
-            color: var(--text-main);
+            color: var(--text);
+            background:
+                radial-gradient(circle at 15% 20%, #17335f 0%, transparent 30%),
+                radial-gradient(circle at 85% 80%, #133c4c 0%, transparent 35%),
+                linear-gradient(135deg, var(--bg) 0%, #04080f 100%);
             min-height: 100vh;
             display: flex;
             flex-direction: column;
-            align-items: center;
         }
 
         header {
             width: 100%;
-            padding: 20px 40px;
-            box-sizing: border-box;
+            padding: 18px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background: var(--glass-bg);
-            backdrop-filter: blur(12px);
-            border-bottom: 1px solid var(--glass-border);
+            border-bottom: 1px solid var(--card-border);
+            background: rgba(6, 16, 33, 0.65);
+            backdrop-filter: blur(10px);
         }
 
         h1 {
             margin: 0;
-            font-size: 1.5rem;
+            font-size: 1.15rem;
             font-weight: 600;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.6px;
         }
 
         h1 span {
-            color: var(--accent-color);
+            color: var(--accent);
         }
 
-        .main-content {
+        .status-pill {
+            border: 1px solid var(--card-border);
+            border-radius: 999px;
+            padding: 8px 14px;
+            background: rgba(11, 28, 58, 0.7);
+            font-size: 0.88rem;
+            color: var(--muted);
+        }
+
+        .app {
+            width: 100%;
+            max-width: 1240px;
+            margin: 0 auto;
+            padding: 24px 16px 40px;
+            display: grid;
+            gap: 20px;
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 18px;
+            box-shadow: 0 18px 40px rgba(2, 7, 18, 0.45);
+        }
+
+        #startup-card h2,
+        #dashboard-card h2 {
+            margin: 0 0 10px;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .muted {
+            color: var(--muted);
+            font-size: 0.9rem;
+            margin: 0 0 14px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+
+        .field {
             display: flex;
             flex-direction: column;
-            align-items: center;
-            width: 100%;
-            max-width: 1280px;
-            padding: 40px 20px;
-            box-sizing: border-box;
-            gap: 30px;
+            gap: 6px;
         }
 
-        /* Video Container */
+        label {
+            font-size: 0.88rem;
+            color: var(--muted);
+            font-weight: 600;
+        }
+
+        input,
+        select,
+        button {
+            border-radius: 10px;
+            border: 1px solid rgba(95, 127, 186, 0.35);
+            background: rgba(5, 14, 30, 0.92);
+            color: var(--text);
+            padding: 10px 12px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            outline: none;
+        }
+
+        input:focus,
+        select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(51, 209, 255, 0.2);
+        }
+
+        button {
+            cursor: pointer;
+            border-color: transparent;
+            background: linear-gradient(120deg, #0ea5e9, #22d3ee);
+            color: #001126;
+            font-weight: 700;
+        }
+
+        button:hover {
+            filter: brightness(1.05);
+        }
+
+        .source-row {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+
+        .error {
+            color: var(--danger);
+            min-height: 18px;
+            font-size: 0.88rem;
+            margin-top: 4px;
+        }
+
+        .meta {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .meta-item {
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            padding: 10px;
+            background: rgba(7, 20, 43, 0.75);
+        }
+
+        .meta-item span {
+            display: block;
+            color: var(--muted);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            margin-bottom: 3px;
+        }
+
+        .meta-item strong {
+            font-size: 0.94rem;
+            color: var(--text);
+        }
+
+        .metrics-card {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .metric {
+            border: 1px solid var(--card-border);
+            background: rgba(7, 20, 43, 0.75);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .metric .label {
+            display: block;
+            color: var(--muted);
+            font-size: 0.76rem;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+
+        .metric .value {
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
         .video-wrapper {
             position: relative;
             width: 100%;
-            max-width: 1024px;
-            border-radius: 16px;
+            border-radius: 14px;
             overflow: hidden;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--card-border);
             background: #000;
-            border: 1px solid var(--glass-border);
         }
 
         #video-feed {
@@ -87,175 +237,181 @@
             left: 0;
             width: 100%;
             height: 100%;
-            pointer-events: none; /* Let clicks pass through */
+            pointer-events: none;
         }
 
         .bounding-box {
             position: absolute;
-            border: 2px solid var(--box-color);
-            background: rgba(16, 185, 129, 0.1);
-            box-sizing: border-box;
+            border: 2px solid var(--box);
+            background: rgba(29, 233, 182, 0.14);
             border-radius: 4px;
-            box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+            box-shadow: 0 0 10px rgba(29, 233, 182, 0.3);
             transition: left 0.1s linear, top 0.1s linear, width 0.1s linear, height 0.1s linear;
         }
 
         .bounding-box::after {
             content: 'Person';
             position: absolute;
-            top: -24px;
+            top: -23px;
             left: -2px;
-            background: var(--box-color);
-            color: #fff;
-            padding: 2px 8px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            border-radius: 4px 4px 4px 0;
-        }
-
-        /* Metrics Display */
-        .metrics-card {
-            background: var(--glass-bg);
-            backdrop-filter: blur(16px);
-            border: 1px solid var(--glass-border);
-            border-radius: 16px;
-            padding: 24px 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 20px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-            width: 100%;
-            max-width: 800px;
-            flex-wrap: wrap;
-        }
-
-        .metric-group {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 4px;
-        }
-
-        .metric-label {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            font-weight: 600;
-        }
-
-        .metric-value {
-            font-size: 1.5rem;
+            background: var(--box);
+            color: #00231b;
             font-weight: 700;
-            color: var(--accent-color);
-            transition: color 0.3s ease;
+            font-size: 0.72rem;
+            border-radius: 4px 4px 4px 0;
+            padding: 2px 7px;
         }
 
-        .importance-group {
-            border-left: 2px solid var(--glass-border);
-            padding-left: 20px;
+        .hidden {
+            display: none;
         }
 
-        .importance-group .metric-value {
-            color: #f59e0b; /* Amber */
-        }
-
-        .arrow {
-            color: var(--text-muted);
-            font-size: 1.5rem;
-            margin: 0 10px;
-        }
-
-        /* Status indicator */
-        .status-dot {
-            height: 10px;
-            width: 10px;
-            background-color: #10b981;
-            border-radius: 50%;
-            display: inline-block;
-            margin-right: 8px;
-            box-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
-            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
-            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        @media (min-width: 760px) {
+            .source-row {
+                grid-template-columns: 1fr 1fr;
+            }
+            .form-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .field-full {
+                grid-column: 1 / -1;
+            }
         }
     </style>
 </head>
 <body>
     <header>
         <h1><span>Swarm</span> Node Vision</h1>
-        <div><span class="status-dot"></span><span id="node-id-display">Node Initializing...</span></div>
+        <div class="status-pill" id="node-id-display">Waiting for startup configuration</div>
     </header>
 
-    <main class="main-content">
-        <!-- Live Metrics Overlay -->
-        <div class="metrics-card">
-            <div class="metric-group">
-                <span class="metric-label">Persons</span>
-                <span class="metric-value" id="val-persons">0</span>
-            </div>
-            <div class="metric-group">
-                <span class="metric-label">Confidence</span>
-                <span class="metric-value" id="val-conf">0.000</span>
-            </div>
-            <div class="metric-group">
-                <span class="metric-label">Motion</span>
-                <span class="metric-value" id="val-motion">0.000</span>
-            </div>
-            
-            <div class="arrow">→</div>
+    <main class="app">
+        <section id="startup-card" class="card">
+            <h2>Startup Configuration</h2>
+            <p class="muted">Choose source mode, enter node name and MQTT broker IP, then start processing.</p>
 
-            <div class="metric-group importance-group">
-                <span class="metric-label">Importance</span>
-                <span class="metric-value" id="val-importance">0.0000</span>
-            </div>
-        </div>
+            <form id="startup-form" class="form-grid">
+                <div class="field">
+                    <label for="node-id">Node Name</label>
+                    <input id="node-id" name="node_id" type="text" placeholder="node_1" required>
+                </div>
 
-        <!-- Video Player with Overlay -->
-        <div class="video-wrapper">
-            <img id="video-feed" src="/video_feed" alt="Live Camera Feed">
-            <div id="boxes-container"></div>
-        </div>
+                <div class="field">
+                    <label for="mqtt-ip">MQTT Broker IP</label>
+                    <input id="mqtt-ip" name="mqtt_broker" type="text" value="192.168.29.223" placeholder="192.168.29.223" required>
+                </div>
+
+                <div class="field">
+                    <label for="source-type">Source Type</label>
+                    <select id="source-type" name="source_type">
+                        <option value="webcam">Webcam</option>
+                        <option value="rtsp">RTSP</option>
+                        <option value="webrtc">WebRTC (URL)</option>
+                    </select>
+                </div>
+
+                <div class="field" id="webcam-index-field">
+                    <label for="webcam-index">Webcam Index</label>
+                    <input id="webcam-index" name="webcam_index" type="number" min="0" value="0">
+                </div>
+
+                <div class="field field-full" id="rtsp-field">
+                    <label for="rtsp-url" id="rtsp-label">Optional RTSP URL (for Start RTSP in webcam mode)</label>
+                    <input id="rtsp-url" name="rtsp_url" type="text" placeholder="rtsp://192.168.1.10:554/stream">
+                </div>
+
+                <div class="field field-full">
+                    <button type="submit" id="start-button">Start Stream & Detection</button>
+                    <div class="error" id="startup-error"></div>
+                </div>
+            </form>
+        </section>
+
+        <section id="dashboard-card" class="card hidden">
+            <h2>Live Node Monitor</h2>
+
+            <div class="meta">
+                <div class="meta-item"><span>Node</span><strong id="meta-node">-</strong></div>
+                <div class="meta-item"><span>MQTT</span><strong id="meta-mqtt">-</strong></div>
+                <div class="meta-item"><span>Source</span><strong id="meta-source">-</strong></div>
+                <div class="meta-item"><span>Quality</span><strong id="meta-quality">-</strong></div>
+            </div>
+
+            <div class="metrics-card">
+                <div class="metric"><span class="label">Persons</span><span class="value" id="val-persons">0</span></div>
+                <div class="metric"><span class="label">Confidence</span><span class="value" id="val-conf">0.000</span></div>
+                <div class="metric"><span class="label">Motion</span><span class="value" id="val-motion">0.000</span></div>
+                <div class="metric"><span class="label">Importance</span><span class="value" id="val-importance">0.0000</span></div>
+            </div>
+
+            <div class="video-wrapper">
+                <img id="video-feed" src="" alt="Live Camera Feed">
+                <div id="boxes-container"></div>
+            </div>
+        </section>
     </main>
 
     <script>
+        const startupForm = document.getElementById('startup-form');
+        const startupCard = document.getElementById('startup-card');
+        const dashboardCard = document.getElementById('dashboard-card');
+        const sourceTypeSelect = document.getElementById('source-type');
+        const rtspField = document.getElementById('rtsp-field');
+        const rtspLabel = document.getElementById('rtsp-label');
+        const rtspInput = document.getElementById('rtsp-url');
+        const webcamIndexField = document.getElementById('webcam-index-field');
+        const startupError = document.getElementById('startup-error');
+        const startButton = document.getElementById('start-button');
+
         const boxesContainer = document.getElementById('boxes-container');
         const videoElement = document.getElementById('video-feed');
-        
-        // Caching previously rendered boxes to minimize DOM manipulations
-        // if YOLO hasn't updated the frame yet.
+
+        let started = false;
         let lastBoxesStr = "";
+
+        function updateSourceFields() {
+            const mode = sourceTypeSelect.value;
+            const isRemote = mode === 'rtsp' || mode === 'webrtc';
+            rtspField.classList.remove('hidden');
+            webcamIndexField.classList.toggle('hidden', isRemote);
+            rtspInput.required = isRemote;
+            rtspLabel.textContent = isRemote
+                ? 'RTSP / WebRTC Stream URL'
+                : 'Optional RTSP URL (for Start RTSP in webcam mode)';
+        }
+
+        function showDashboard() {
+            startupCard.classList.add('hidden');
+            dashboardCard.classList.remove('hidden');
+            videoElement.src = `/video_feed?ts=${Date.now()}`;
+            started = true;
+        }
 
         function updateBoxes(boxes, dims) {
             const boxesStr = JSON.stringify(boxes);
             if (boxesStr === lastBoxesStr) {
-                // No update needed
                 return;
             }
             lastBoxesStr = boxesStr;
-
-            // Clear container
             boxesContainer.innerHTML = '';
-            
-            if (!dims || dims[0] === 0 || dims[1] === 0 || !boxes || boxes.length === 0) return;
-            
+
+            if (!dims || dims[0] === 0 || dims[1] === 0 || !boxes || boxes.length === 0) {
+                return;
+            }
+
             const originalWidth = dims[0];
             const originalHeight = dims[1];
-
             const rect = videoElement.getBoundingClientRect();
             const renderedWidth = rect.width;
             const renderedHeight = rect.height;
-            
-            if (renderedWidth === 0 || renderedHeight === 0) return;
+
+            if (!renderedWidth || !renderedHeight) {
+                return;
+            }
 
             const videoRatio = originalWidth / originalHeight;
             const elementRatio = renderedWidth / renderedHeight;
-            
+
             let actualVidWidth = renderedWidth;
             let actualVidHeight = renderedHeight;
             let topOffset = 0;
@@ -272,10 +428,10 @@
             const scaleX = actualVidWidth / originalWidth;
             const scaleY = actualVidHeight / originalHeight;
 
-            boxes.forEach(box => {
+            boxes.forEach((box) => {
                 const div = document.createElement('div');
                 div.className = 'bounding-box';
-                
+
                 const left = leftOffset + (box.x1 * scaleX);
                 const top = topOffset + (box.y1 * scaleY);
                 const width = (box.x2 - box.x1) * scaleX;
@@ -290,43 +446,96 @@
             });
         }
 
-        async function fetchStatus() {
+        async function startNode(evt) {
+            evt.preventDefault();
+            startupError.textContent = '';
+            startButton.disabled = true;
+
+            const formData = new FormData(startupForm);
+            const payload = {
+                node_id: String(formData.get('node_id') || '').trim(),
+                mqtt_broker: String(formData.get('mqtt_broker') || '').trim(),
+                source_type: String(formData.get('source_type') || 'webcam').trim().toLowerCase(),
+                webcam_index: Number(formData.get('webcam_index') || 0),
+                rtsp_url: String(formData.get('rtsp_url') || '').trim()
+            };
+
             try {
-                const response = await fetch('/api/status');
-                if (response.ok) {
-                    const data = await response.json();
-                    
-                    document.getElementById('node-id-display').textContent = `Node: ${data.node_id}`;
-                    document.getElementById('val-persons').textContent = data.person_count;
-                    document.getElementById('val-conf').textContent = data.avg_confidence.toFixed(3);
-                    document.getElementById('val-motion').textContent = data.motion_factor.toFixed(3);
-                    document.getElementById('val-importance').textContent = data.importance.toFixed(4);
+                const response = await fetch('/api/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
 
-                    const impGroup = document.querySelector('.importance-group .metric-value');
-                    if (data.importance > 0.7) {
-                        impGroup.style.color = '#ef4444'; // Red
-                    } else if (data.importance > 0.3) {
-                        impGroup.style.color = '#f59e0b'; // Amber
-                    } else {
-                        impGroup.style.color = '#10b981'; // Green
-                    }
-
-                    if (data.boxes && data.frame_dims) {
-                        updateBoxes(data.boxes, data.frame_dims);
-                    }
+                const data = await response.json();
+                if (!response.ok || !data.ok) {
+                    startupError.textContent = data.error || 'Failed to start node';
+                    startButton.disabled = false;
+                    return;
                 }
-            } catch (error) {
-                console.error("Error fetching node status:", error);
+
+                showDashboard();
+            } catch (err) {
+                startupError.textContent = 'Cannot reach backend. Check Flask server.';
+                startButton.disabled = false;
             }
         }
 
-        // Poll every 100ms
-        setInterval(fetchStatus, 100);
-        
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/api/status');
+                if (!response.ok) {
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (!started && data.started) {
+                    showDashboard();
+                }
+
+                document.getElementById('node-id-display').textContent =
+                    data.started ? `Node: ${data.node_id}` : 'Waiting for startup configuration';
+
+                document.getElementById('meta-node').textContent = data.node_id;
+                document.getElementById('meta-mqtt').textContent = data.mqtt_broker;
+                document.getElementById('meta-source').textContent = `${data.source_type} (${data.stream_source})`;
+                document.getElementById('meta-quality').textContent = data.quality;
+
+                document.getElementById('val-persons').textContent = data.person_count;
+                document.getElementById('val-conf').textContent = Number(data.avg_confidence).toFixed(3);
+                document.getElementById('val-motion').textContent = Number(data.motion_factor).toFixed(3);
+                document.getElementById('val-importance').textContent = Number(data.importance).toFixed(4);
+
+                const imp = Number(data.importance);
+                const importanceEl = document.getElementById('val-importance');
+                if (imp > 0.7) {
+                    importanceEl.style.color = '#ff5d6f';
+                } else if (imp > 0.3) {
+                    importanceEl.style.color = '#ffd166';
+                } else {
+                    importanceEl.style.color = '#17dba5';
+                }
+
+                if (data.boxes && data.frame_dims) {
+                    updateBoxes(data.boxes, data.frame_dims);
+                }
+            } catch (_err) {
+                // Keep UI quiet on transient failures.
+            }
+        }
+
+        sourceTypeSelect.addEventListener('change', updateSourceFields);
+        startupForm.addEventListener('submit', startNode);
+
         window.addEventListener('resize', () => {
-            lastBoxesStr = ""; // force redraw on next tick
+            lastBoxesStr = '';
             boxesContainer.innerHTML = '';
         });
+
+        updateSourceFields();
+        fetchStatus();
+        setInterval(fetchStatus, 200);
     </script>
 </body>
 </html>

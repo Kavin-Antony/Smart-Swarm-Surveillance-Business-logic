@@ -41,7 +41,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import paho.mqtt.client as mqtt
-from flask import Flask, jsonify, render_template, Response
+from flask import Flask, jsonify, render_template, Response, request
 
 # ===========================================================================
 # [A] CONFIGURATION & GLOBALS
@@ -77,6 +77,7 @@ NODE_TIMEOUT: float = float(os.environ.get("NODE_TIMEOUT", "8.0"))   # seconds
 
 # ── Flask ─────────────────────────────────────────────────────────────────
 FLASK_PORT: int = 5001
+AUTO_START: bool = os.environ.get("AUTO_START", "0") == "1"
 
 # ── YOLO ─────────────────────────────────────────────────────────────────
 YOLO_MODEL: str = os.environ.get("YOLO_MODEL", "yolov8n.pt")
@@ -89,6 +90,17 @@ QUALITY_TIERS: dict = {
     "MEDIUM": {"resolution": "720p",  "width": 1280, "height": 720,  "bitrate_kbps": 1500, "fps": 20},
     "HIGH":   {"resolution": "1080p", "width": 1920, "height": 1080, "bitrate_kbps": 4000, "fps": 30},
 }
+
+# ── Worker startup guard ───────────────────────────────────────────────────
+WORKERS_STARTED: bool = False
+WORKERS_LOCK = threading.Lock()
+
+
+def _rebuild_topics() -> None:
+    """Refresh MQTT topics when NODE_ID changes at runtime startup config."""
+    global TOPIC_PUBLISH, TOPIC_SUBSCRIBE
+    TOPIC_PUBLISH = f"vms/node/{NODE_ID}/importance"
+    TOPIC_SUBSCRIBE = "vms/node/+/importance"
 
 # ===========================================================================
 # [B] SHARED STATE  (thread-safe via locks)
@@ -106,6 +118,9 @@ class SharedState:
 
     def __init__(self):
         self.lock = threading.Lock()
+        self.started: bool = False
+        self.source_type: str = "rtsp" if RTSP_URL else "webcam"
+        self.stream_source: str = RTSP_URL if RTSP_URL else f"webcam:{WEBCAM_INDEX}"
 
         # ── Importance score computed locally ──────────────────────────
         self.importance_score: float = 0.0
@@ -486,6 +501,7 @@ def _build_status() -> dict:
             for pid, v in state.peer_scores.items()
         }
         return {
+            "started":             state.started,
             "node_id":             NODE_ID,
             "importance":          round(state.importance_score, 6),
             "person_count":        state.person_count,
@@ -504,6 +520,8 @@ def _build_status() -> dict:
                                    ).isoformat() + "Z" if state.last_frame_ts else None,
             "total_bandwidth_mbps": TOTAL_BANDWIDTH,
             "mqtt_broker":         MQTT_BROKER,
+            "source_type":         state.source_type,
+            "stream_source":       state.stream_source,
             "boxes":               state.boxes,
             "frame_dims":          state.frame_dims,
         }
@@ -519,6 +537,74 @@ def index():
 def api_status():
     """Returns node status as JSON, including bounding boxes."""
     return jsonify(_build_status())
+
+
+def _start_workers_once() -> bool:
+    """Start all worker threads exactly once."""
+    global WORKERS_STARTED
+    with WORKERS_LOCK:
+        if WORKERS_STARTED:
+            return False
+        _start_daemon(video_processing_thread, "Thread-VideoYOLO")
+        _start_daemon(mqtt_thread,             "Thread-MQTT")
+        _start_daemon(negotiation_thread,      "Thread-Negotiation")
+        WORKERS_STARTED = True
+        return True
+
+
+@app.route("/api/start", methods=["POST"])
+def api_start():
+    """Receive startup config from frontend and start processing workers."""
+    global NODE_ID, MQTT_BROKER, RTSP_URL, WEBCAM_INDEX
+
+    payload = request.get_json(silent=True) or {}
+
+    node_id = str(payload.get("node_id", "")).strip()
+    mqtt_broker = str(payload.get("mqtt_broker", "")).strip()
+    source_type = str(payload.get("source_type", "webcam")).strip().lower()
+    rtsp_url = str(payload.get("rtsp_url", "")).strip()
+
+    if not node_id:
+        return jsonify({"ok": False, "error": "Node name is required."}), 400
+    if not mqtt_broker:
+        return jsonify({"ok": False, "error": "MQTT broker IP is required."}), 400
+    if source_type not in {"webcam", "rtsp", "webrtc"}:
+        return jsonify({"ok": False, "error": "Source type must be webcam or rtsp/webrtc."}), 400
+    if source_type in {"rtsp", "webrtc"} and not rtsp_url:
+        return jsonify({"ok": False, "error": "RTSP/WebRTC URL is required for stream mode."}), 400
+
+    # Webcam page supports "start RTSP" by supplying a link.
+    if source_type == "webcam" and rtsp_url:
+        source_type = "rtsp"
+
+    webcam_index_val = payload.get("webcam_index", WEBCAM_INDEX)
+    try:
+        webcam_index = int(webcam_index_val)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Webcam index must be an integer."}), 400
+
+    NODE_ID = node_id
+    MQTT_BROKER = mqtt_broker
+    WEBCAM_INDEX = webcam_index
+    RTSP_URL = rtsp_url if source_type in {"rtsp", "webrtc"} else ""
+    _rebuild_topics()
+
+    with state.lock:
+        state.started = True
+        state.source_type = source_type
+        state.stream_source = RTSP_URL if RTSP_URL else f"webcam:{WEBCAM_INDEX}"
+
+    just_started = _start_workers_once()
+    if just_started:
+        log.info(
+            "[Startup] Node=%s | MQTT=%s:%d | source=%s",
+            NODE_ID,
+            MQTT_BROKER,
+            MQTT_PORT,
+            state.stream_source,
+        )
+
+    return jsonify({"ok": True, "started": True, "already_running": not just_started})
 
 def generate_frames():
     """Generator for MJPEG stream."""
@@ -549,7 +635,9 @@ def metrics():
 @app.route("/health", methods=["GET"])
 def health():
     """Liveness probe."""
-    return jsonify({"status": "ok", "node_id": NODE_ID}), 200
+    with state.lock:
+        started = state.started
+    return jsonify({"status": "ok", "started": started, "node_id": NODE_ID}), 200
 
 
 # ===========================================================================
@@ -572,10 +660,15 @@ def main():
     log.info("  Flask port  : %d", FLASK_PORT)
     log.info("=" * 60)
 
-    # ── Spawn worker threads ──────────────────────────────────────────
-    _start_daemon(video_processing_thread, "Thread-VideoYOLO")
-    _start_daemon(mqtt_thread,             "Thread-MQTT")
-    _start_daemon(negotiation_thread,      "Thread-Negotiation")
+    if AUTO_START:
+        with state.lock:
+            state.started = True
+            state.source_type = "rtsp" if RTSP_URL else "webcam"
+            state.stream_source = RTSP_URL if RTSP_URL else f"webcam:{WEBCAM_INDEX}"
+        _start_workers_once()
+        log.info("[Startup] AUTO_START=1 enabled: workers started from environment config")
+    else:
+        log.info("[Startup] Waiting for frontend setup at / before starting workers")
 
     # ── Main thread: Flask server ─────────────────────────────────────
     log.info("[Flask] Dashboard at http://0.0.0.0:%d/", FLASK_PORT)
@@ -583,4 +676,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _rebuild_topics()
     main()
