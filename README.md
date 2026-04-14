@@ -97,8 +97,7 @@ The `run` script automatically loads `.env` if present.
 
 ```bash
 NODE_ID=node_1 \
-MQTT_BROKER=192.168.1.50 \
-RTSP_URL=rtsp://192.168.1.100:554/main \
+MQTT_BROKER=192.168.29.223 \
 TOTAL_BANDWIDTH=10.0 \
 DETECTION_INTERVAL=5 \
 FLASK_PORT=5001 \
