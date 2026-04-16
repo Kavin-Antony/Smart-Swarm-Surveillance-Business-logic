@@ -78,6 +78,8 @@ PRIORITY_WEIGHT: float = float(os.environ.get("PRIORITY_WEIGHT", "0.7"))
 
 # ── Fault Tolerance ───────────────────────────────────────────────────────
 NODE_TIMEOUT: float = float(os.environ.get("NODE_TIMEOUT", "8.0"))   # seconds
+QUALITY_CONFIRM_TICKS: int = int(os.environ.get("QUALITY_CONFIRM_TICKS", "2"))
+MIN_QUALITY_HOLD_SEC: float = float(os.environ.get("MIN_QUALITY_HOLD_SEC", "4.0"))
 
 # ── Flask ─────────────────────────────────────────────────────────────────
 FLASK_PORT: int = int(os.environ.get("FLASK_PORT", "5001"))
@@ -94,6 +96,12 @@ QUALITY_TIERS: dict = {
     "MEDIUM": {"resolution": "720p",  "width": 1280, "height": 720,  "bitrate_kbps": 1500, "fps": 20},
     "HIGH":   {"resolution": "1080p", "width": 1920, "height": 1080, "bitrate_kbps": 4000, "fps": 30},
 }
+RTSP_EXPORT_BASE: str = os.environ.get("RTSP_EXPORT_BASE", "rtsp://localhost:8554").rstrip("/")
+RTSP_EXPORT_PATHS: dict = {
+    "LOW": "webcam_low",
+    "MEDIUM": "webcam_med",
+    "HIGH": "webcam_high",
+}
 
 # ── Worker startup guard ───────────────────────────────────────────────────
 WORKERS_STARTED: bool = False
@@ -107,7 +115,12 @@ def _rebuild_topics() -> None:
     TOPIC_SUBSCRIBE = "vms/node/+/importance"
 
 
-def _build_ffmpeg_cmd(params: dict) -> list[str]:
+def _rtsp_url_for_quality(quality: str) -> str:
+    path = RTSP_EXPORT_PATHS.get(quality, "webcam_med")
+    return f"{RTSP_EXPORT_BASE}/{path}"
+
+
+def _build_ffmpeg_cmd(params: dict, output_url: str) -> list[str]:
     """Build ffmpeg command from active encoder parameters."""
     return [
         "ffmpeg",
@@ -128,17 +141,25 @@ def _build_ffmpeg_cmd(params: dict) -> list[str]:
         "ultrafast",
         "-tune",
         "zerolatency",
+        "-g",
+        str(max(10, int(params["fps"]) * 2)),
+        "-keyint_min",
+        str(max(10, int(params["fps"]))),
+        "-sc_threshold",
+        "0",
         "-b:v",
         f"{params['bitrate_kbps']}k",
+        "-rtsp_transport",
+        "tcp",
         "-f",
         "rtsp",
-        "rtsp://localhost:8554/webcam",
+        output_url,
     ]
 
 
-def _start_ffmpeg_process(params: dict) -> subprocess.Popen:
+def _start_ffmpeg_process(params: dict, output_url: str) -> subprocess.Popen:
     """Start ffmpeg process for streaming to MediaMTX using current quality tier."""
-    cmd = _build_ffmpeg_cmd(params)
+    cmd = _build_ffmpeg_cmd(params, output_url)
     return subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
@@ -164,27 +185,11 @@ def _stop_ffmpeg_process(proc: subprocess.Popen | None) -> None:
 
 
 def _restart_stream_with_params(params: dict) -> None:
-    """Restart ffmpeg stream to apply updated bitrate/fps/resolution."""
-    with state.lock:
-        old_proc = state.ffmpeg_proc
-        state.is_streaming = False
-        state.ffmpeg_proc = None
-
-    _stop_ffmpeg_process(old_proc)
-
-    try:
-        new_proc = _start_ffmpeg_process(params)
-        with state.lock:
-            state.ffmpeg_proc = new_proc
-            state.is_streaming = True
-        log.info(
-            "[Stream] Reconfigured encoder → %s @ %dfps, %dkbps",
-            params["resolution"],
-            params["fps"],
-            params["bitrate_kbps"],
-        )
-    except Exception as exc:
-        log.error("[Stream] Failed to reconfigure ffmpeg stream: %s", exc)
+    """Compatibility shim: three publishers stay up, no restart required on tier switch."""
+    log.debug(
+        "[Stream] Keeping RTSP publishers running; active quality switched to %s",
+        params.get("resolution", "unknown"),
+    )
 
 
 def _person_bucket(person_count: int) -> int:
@@ -250,7 +255,7 @@ class SharedState:
         
         # ── Stream Control ─────────────────────────────────────────────
         self.is_streaming: bool = False
-        self.ffmpeg_proc: subprocess.Popen | None = None
+        self.ffmpeg_procs: dict[str, subprocess.Popen] = {}
 
 
 state = SharedState()
@@ -351,9 +356,11 @@ def video_processing_thread():
         else:
             display_frame = frame
         
-        # ── Encode Frame for Frontend MJPEG Stream ─────────────────────
+        # ── Encode Frames for dashboard and RTSP exporters ─────────────
         ret_jpg, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         frame_bytes = buffer.tobytes() if ret_jpg else b''
+        ret_raw_jpg, raw_buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        raw_frame_bytes = raw_buffer.tobytes() if ret_raw_jpg else b''
 
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
@@ -401,20 +408,25 @@ def video_processing_thread():
         # Always update latest_frame so the stream is continuous
         with state.lock:
             state.latest_frame = frame_bytes
-            
-            # Pipe to FFmpeg if streaming is active
-            if state.is_streaming and state.ffmpeg_proc is not None:
-                if state.ffmpeg_proc.poll() is None:
-                    try:
-                        state.ffmpeg_proc.stdin.write(frame_bytes)
-                    except Exception as e:
-                        log.error("[Video] Failed to write to FFmpeg stdin: %s", e)
-                        state.is_streaming = False
-                        state.ffmpeg_proc = None
-                else:
-                    log.warning("[Video] FFmpeg process died unexpectedly.")
-                    state.is_streaming = False
-                    state.ffmpeg_proc = None
+            procs = dict(state.ffmpeg_procs) if state.is_streaming else {}
+
+        write_failed = False
+        if raw_frame_bytes and procs:
+            for quality, proc in procs.items():
+                if proc.poll() is not None or proc.stdin is None:
+                    log.warning("[Video] FFmpeg process for %s died unexpectedly.", quality)
+                    write_failed = True
+                    break
+                try:
+                    proc.stdin.write(raw_frame_bytes)
+                except Exception as exc:
+                    log.error("[Video] Failed to write to FFmpeg stdin (%s): %s", quality, exc)
+                    write_failed = True
+                    break
+
+        if write_failed:
+            stopped = _stop_rtsp_exporters()
+            log.warning("[Video] RTSP exporters stopped after write failure (%d process(es)).", stopped)
 
     cap.release()
 
@@ -528,7 +540,6 @@ def _apply_encoder_params(quality: str):
     with state.lock:
         state.encoder_params = params
         state.quality = quality
-        restart_stream = state.is_streaming
     log.info(
         "[Encoder] → %s | %s | %d kbps | %d fps",
         quality,
@@ -536,9 +547,6 @@ def _apply_encoder_params(quality: str):
         params["bitrate_kbps"],
         params["fps"],
     )
-
-    if restart_stream:
-        _restart_stream_with_params(params)
 
 
 def _select_quality_tier(person_count: int, rank: int) -> str:
@@ -586,6 +594,9 @@ def negotiation_thread():
     No central controller — each node independently runs this same logic.
     """
     previous_quality: str = ""
+    candidate_quality: str = ""
+    candidate_ticks: int = 0
+    last_switch_ts: float = 0.0
 
     while True:
         time.sleep(1.0)
@@ -636,7 +647,24 @@ def negotiation_thread():
         with state.lock:
             state.allocated_bandwidth = allocated
 
+        now = time.time()
+        should_switch = False
+
         if new_quality != previous_quality:
+            if new_quality == candidate_quality:
+                candidate_ticks += 1
+            else:
+                candidate_quality = new_quality
+                candidate_ticks = 1
+
+            hold_ok = (previous_quality == "") or ((now - last_switch_ts) >= MIN_QUALITY_HOLD_SEC)
+            confirm_ok = candidate_ticks >= max(1, QUALITY_CONFIRM_TICKS)
+            should_switch = hold_ok and confirm_ok
+        else:
+            candidate_quality = ""
+            candidate_ticks = 0
+
+        if should_switch:
             log.info(
                 "[Negotiation] nodes=%d  rank=%d  persons=%d  importance=%.4f  quality: %s → %s",
                 node_count,
@@ -648,14 +676,19 @@ def negotiation_thread():
             )
             _apply_encoder_params(new_quality)
             previous_quality = new_quality
+            candidate_quality = ""
+            candidate_ticks = 0
+            last_switch_ts = now
 
         log.debug(
-            "[Negotiation] nodes=%d  my_score=%.4f  total=%.4f  rank=%d  quality=%s",
+            "[Negotiation] nodes=%d  my_score=%.4f  total=%.4f  rank=%d  quality=%s  candidate=%s(%d)",
             len(all_nodes),
             my_score,
             total_score,
             my_rank + 1 if my_rank < node_count else 0,
             new_quality,
+            candidate_quality or "-",
+            candidate_ticks,
         )
 
 
@@ -704,6 +737,10 @@ def _build_status() -> dict:
             "boxes":               state.boxes,
             "frame_dims":          state.frame_dims,
             "is_streaming":        state.is_streaming,
+            "active_rtsp_url":     _rtsp_url_for_quality(state.quality),
+            "rtsp_outputs": {
+                q: _rtsp_url_for_quality(q) for q in ("LOW", "MEDIUM", "HIGH")
+            },
         }
 
 
@@ -794,7 +831,18 @@ def api_start():
             state.stream_source,
         )
 
-    return jsonify({"ok": True, "started": True, "already_running": not just_started})
+    export_started, export_status = _start_rtsp_export()
+    if not export_started and export_status != "already_streaming":
+        log.warning("[Stream] RTSP auto-start failed: %s", export_status)
+
+    return jsonify(
+        {
+            "ok": True,
+            "started": True,
+            "already_running": not just_started,
+            "rtsp_export": "started" if export_started else export_status,
+        }
+    )
 
 def generate_frames():
     """Generator for MJPEG stream."""
@@ -817,43 +865,67 @@ def video_feed():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
-@app.route("/api/stream/start", methods=["POST"])
-def stream_start():
+def _start_rtsp_export() -> tuple[bool, str]:
+    """Start three FFmpeg RTSP exporters if not already running."""
     with state.lock:
         if state.is_streaming:
-            return jsonify({"status": "already_streaming"}), 400
+            return False, "already_streaming"
 
-        params = dict(state.encoder_params)
+    started: dict[str, subprocess.Popen] = {}
 
     try:
-        proc = _start_ffmpeg_process(params)
+        for quality in ("LOW", "MEDIUM", "HIGH"):
+            params = QUALITY_TIERS[quality].copy()
+            output_url = _rtsp_url_for_quality(quality)
+            started[quality] = _start_ffmpeg_process(params, output_url)
+
         with state.lock:
-            state.ffmpeg_proc = proc
+            state.ffmpeg_procs = started
             state.is_streaming = True
+
         log.info(
-            "[Stream] Started FFmpeg stream to MediaMTX on rtsp://localhost:8554/webcam "
-            "(%s, %dfps, %dkbps)",
-            params["resolution"],
-            params["fps"],
-            params["bitrate_kbps"],
+            "[Stream] Started RTSP publishers: LOW=%s, MEDIUM=%s, HIGH=%s",
+            _rtsp_url_for_quality("LOW"),
+            _rtsp_url_for_quality("MEDIUM"),
+            _rtsp_url_for_quality("HIGH"),
         )
+        return True, "started"
+    except Exception as exc:
+        for proc in started.values():
+            _stop_ffmpeg_process(proc)
+        log.error("[Stream] Failed to start FFmpeg: %s", exc)
+        return False, str(exc)
+
+
+def _stop_rtsp_exporters() -> int:
+    """Stop all active RTSP exporter processes."""
+    with state.lock:
+        procs = list(state.ffmpeg_procs.values())
+        state.ffmpeg_procs = {}
+        state.is_streaming = False
+
+    for proc in procs:
+        _stop_ffmpeg_process(proc)
+    return len(procs)
+
+
+@app.route("/api/stream/start", methods=["POST"])
+def stream_start():
+    started, status = _start_rtsp_export()
+    if started:
         return jsonify({"status": "started"}), 200
-    except Exception as e:
-        log.error("[Stream] Failed to start FFmpeg: %s", e)
-        return jsonify({"error": str(e)}), 500
+    if status == "already_streaming":
+        return jsonify({"status": "already_streaming"}), 400
+    return jsonify({"error": status}), 500
 
 @app.route("/api/stream/stop", methods=["POST"])
 def stream_stop():
     with state.lock:
-        if not state.is_streaming or state.ffmpeg_proc is None:
+        if not state.is_streaming or not state.ffmpeg_procs:
             return jsonify({"status": "not_streaming"}), 400
 
-        proc = state.ffmpeg_proc
-        state.is_streaming = False
-        state.ffmpeg_proc = None
-
-    _stop_ffmpeg_process(proc)
-    log.info("[Stream] Stopped FFmpeg stream")
+    stopped = _stop_rtsp_exporters()
+    log.info("[Stream] Stopped FFmpeg RTSP publishers (%d process(es))", stopped)
     return jsonify({"status": "stopped"}), 200
 
 
