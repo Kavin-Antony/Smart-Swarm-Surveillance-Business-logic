@@ -441,12 +441,14 @@ def _on_message(client, userdata, msg):
         payload = json.loads(msg.payload.decode())
         peer_id = payload.get("node_id")
         importance = float(payload.get("importance", 0.0))
+        person_count = int(payload.get("person_count", 0))
         ts = float(payload.get("timestamp", time.time()))
 
         if peer_id and peer_id != NODE_ID:
             with state.lock:
                 state.peer_scores[peer_id] = {
                     "importance": importance,
+                    "person_count": person_count,
                     "ts": ts,
                 }
             log.debug("[MQTT] Peer update: %s → %.4f", peer_id, importance)
@@ -799,14 +801,15 @@ def generate_frames():
     while True:
         with state.lock:
             frame_bytes = state.latest_frame
+            fps = int(state.encoder_params.get("fps", 25) or 25)
             
         if frame_bytes:
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
         else:
             time.sleep(0.1)
-            
-        time.sleep(0.04)  # throttle to ~25 FPS
+
+        time.sleep(max(0.01, 1.0 / max(1, fps)))
 
 @app.route("/video_feed", methods=["GET"])
 def video_feed():

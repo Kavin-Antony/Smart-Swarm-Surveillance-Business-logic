@@ -224,6 +224,29 @@
             background: #000;
         }
 
+        .video-badge {
+            position: absolute;
+            z-index: 2;
+            top: 12px;
+            left: 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: rgba(4, 12, 24, 0.82);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: var(--text);
+            backdrop-filter: blur(8px);
+            font-size: 0.84rem;
+            pointer-events: none;
+        }
+
+        .video-badge strong {
+            color: var(--accent);
+            font-weight: 700;
+        }
+
         #video-feed {
             display: block;
             width: 100%;
@@ -352,6 +375,11 @@
             </div>
 
             <div class="video-wrapper">
+                <div class="video-badge">
+                    <span>Live Stream</span>
+                    <strong id="badge-resolution">-</strong>
+                    <span id="badge-fps">- fps</span>
+                </div>
                 <img id="video-feed" src="" alt="Live Camera Feed">
                 <div id="boxes-container"></div>
             </div>
@@ -372,6 +400,8 @@
 
         const boxesContainer = document.getElementById('boxes-container');
         const videoElement = document.getElementById('video-feed');
+        const badgeResolution = document.getElementById('badge-resolution');
+        const badgeFps = document.getElementById('badge-fps');
 
         let started = false;
         let lastBoxesStr = "";
@@ -511,6 +541,8 @@
                 document.getElementById('meta-quality').textContent = `${data.quality} quality`;
                 document.getElementById('meta-resolution').textContent = data.resolution || '-';
                 document.getElementById('meta-encoding').textContent = `${Number(data.bitrate_kbps || 0).toFixed(0)} kbps · ${Number(data.fps || 0).toFixed(0)} fps`;
+                badgeResolution.textContent = data.resolution || '-';
+                badgeFps.textContent = `${Number(data.fps || 0).toFixed(0)} fps`;
 
                 document.getElementById('val-persons').textContent = data.person_count;
                 document.getElementById('val-conf').textContent = Number(data.avg_confidence).toFixed(3);
