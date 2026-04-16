@@ -72,12 +72,14 @@ TOPIC_SUBSCRIBE: str = "vms/node/+/importance"
 
 # ── Bandwidth ─────────────────────────────────────────────────────────────
 TOTAL_BANDWIDTH: float = float(os.environ.get("TOTAL_BANDWIDTH", "10.0"))  # Mbps
+# 0.0 => pure fair-share, 1.0 => pure priority-share
+PRIORITY_WEIGHT: float = float(os.environ.get("PRIORITY_WEIGHT", "0.7"))
 
 # ── Fault Tolerance ───────────────────────────────────────────────────────
 NODE_TIMEOUT: float = float(os.environ.get("NODE_TIMEOUT", "8.0"))   # seconds
 
 # ── Flask ─────────────────────────────────────────────────────────────────
-FLASK_PORT: int = 5001
+FLASK_PORT: int = int(os.environ.get("FLASK_PORT", "5001"))
 AUTO_START: bool = os.environ.get("AUTO_START", "0") == "1"
 
 # ── YOLO ─────────────────────────────────────────────────────────────────
@@ -103,6 +105,85 @@ def _rebuild_topics() -> None:
     TOPIC_PUBLISH = f"vms/node/{NODE_ID}/importance"
     TOPIC_SUBSCRIBE = "vms/node/+/importance"
 
+
+def _build_ffmpeg_cmd(params: dict) -> list[str]:
+    """Build ffmpeg command from active encoder parameters."""
+    return [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "mjpeg",
+        "-r",
+        str(params["fps"]),
+        "-i",
+        "-",
+        "-vf",
+        f"scale={params['width']}:{params['height']}",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-tune",
+        "zerolatency",
+        "-b:v",
+        f"{params['bitrate_kbps']}k",
+        "-f",
+        "rtsp",
+        "rtsp://localhost:8554/webcam",
+    ]
+
+
+def _start_ffmpeg_process(params: dict) -> subprocess.Popen:
+    """Start ffmpeg process for streaming to MediaMTX using current quality tier."""
+    cmd = _build_ffmpeg_cmd(params)
+    return subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _stop_ffmpeg_process(proc: subprocess.Popen | None) -> None:
+    """Gracefully stop ffmpeg process if present."""
+    if proc is None:
+        return
+    try:
+        if proc.stdin:
+            proc.stdin.close()
+        proc.terminate()
+        proc.wait(timeout=3)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _restart_stream_with_params(params: dict) -> None:
+    """Restart ffmpeg stream to apply updated bitrate/fps/resolution."""
+    with state.lock:
+        old_proc = state.ffmpeg_proc
+        state.is_streaming = False
+        state.ffmpeg_proc = None
+
+    _stop_ffmpeg_process(old_proc)
+
+    try:
+        new_proc = _start_ffmpeg_process(params)
+        with state.lock:
+            state.ffmpeg_proc = new_proc
+            state.is_streaming = True
+        log.info(
+            "[Stream] Reconfigured encoder → %s @ %dfps, %dkbps",
+            params["resolution"],
+            params["fps"],
+            params["bitrate_kbps"],
+        )
+    except Exception as exc:
+        log.error("[Stream] Failed to reconfigure ffmpeg stream: %s", exc)
 # ===========================================================================
 # [B] SHARED STATE  (thread-safe via locks)
 # ===========================================================================
@@ -294,6 +375,7 @@ def video_processing_thread():
                     except Exception as e:
                         log.error("[Video] Failed to write to FFmpeg stdin: %s", e)
                         state.is_streaming = False
+                        state.ffmpeg_proc = None
                 else:
                     log.warning("[Video] FFmpeg process died unexpectedly.")
                     state.is_streaming = False
@@ -407,6 +489,7 @@ def _apply_encoder_params(quality: str):
     with state.lock:
         state.encoder_params = params
         state.quality = quality
+        restart_stream = state.is_streaming
     log.info(
         "[Encoder] → %s | %s | %d kbps | %d fps",
         quality,
@@ -415,6 +498,8 @@ def _apply_encoder_params(quality: str):
         params["fps"],
     )
 
+    if restart_stream:
+        _restart_stream_with_params(params)
 
 def _prune_stale_peers() -> bool:
     """
@@ -465,12 +550,17 @@ def negotiation_thread():
         all_scores.update({pid: v["importance"] for pid, v in peer_data.items()})
 
         total_score = sum(all_scores.values())
+        node_count = max(len(all_scores), 1)
 
-        # ── 3. Calculate share ratio ──────────────────────────────────
+        # ── 3. Calculate share ratio (hybrid fair-share + priority) ──
+        fair_ratio = 1.0 / node_count
         if total_score == 0.0:
-            my_share_ratio = 1.0 / max(len(all_scores), 1)
+            priority_ratio = fair_ratio
         else:
-            my_share_ratio = my_score / total_score
+            priority_ratio = my_score / total_score
+
+        alpha = max(0.0, min(1.0, PRIORITY_WEIGHT))
+        my_share_ratio = ((1.0 - alpha) * fair_ratio) + (alpha * priority_ratio)
 
         # ── 4. Allocate bandwidth ─────────────────────────────────────
         allocated = my_share_ratio * TOTAL_BANDWIDTH
@@ -538,6 +628,7 @@ def _build_status() -> dict:
                                    ).isoformat() + "Z" if state.last_frame_ts else None,
             "total_bandwidth_mbps": TOTAL_BANDWIDTH,
             "mqtt_broker":         MQTT_BROKER,
+            "mqtt_port":           MQTT_PORT,
             "source_type":         state.source_type,
             "stream_source":       state.stream_source,
             "boxes":               state.boxes,
@@ -574,7 +665,7 @@ def _start_workers_once() -> bool:
 @app.route("/api/start", methods=["POST"])
 def api_start():
     """Receive startup config from frontend and start processing workers."""
-    global NODE_ID, MQTT_BROKER, RTSP_URL, WEBCAM_INDEX
+    global NODE_ID, MQTT_BROKER, MQTT_PORT, RTSP_URL, WEBCAM_INDEX
 
     payload = request.get_json(silent=True) or {}
 
@@ -582,11 +673,20 @@ def api_start():
     mqtt_broker = str(payload.get("mqtt_broker", "")).strip()
     source_type = str(payload.get("source_type", "webcam")).strip().lower()
     rtsp_url = str(payload.get("rtsp_url", "")).strip()
+    mqtt_port_val = payload.get("mqtt_port", MQTT_PORT)
 
     if not node_id:
         return jsonify({"ok": False, "error": "Node name is required."}), 400
     if not mqtt_broker:
         return jsonify({"ok": False, "error": "MQTT broker IP is required."}), 400
+
+    try:
+        mqtt_port = int(mqtt_port_val)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "MQTT port must be an integer."}), 400
+
+    if mqtt_port < 1 or mqtt_port > 65535:
+        return jsonify({"ok": False, "error": "MQTT port must be between 1 and 65535."}), 400
     if source_type not in {"webcam", "rtsp", "webrtc"}:
         return jsonify({"ok": False, "error": "Source type must be webcam or rtsp/webrtc."}), 400
     if source_type in {"rtsp", "webrtc"} and not rtsp_url:
@@ -604,6 +704,7 @@ def api_start():
 
     NODE_ID = node_id
     MQTT_BROKER = mqtt_broker
+    MQTT_PORT = mqtt_port
     WEBCAM_INDEX = webcam_index
     RTSP_URL = rtsp_url if source_type in {"rtsp", "webrtc"} else ""
     _rebuild_topics()
@@ -650,55 +751,39 @@ def stream_start():
     with state.lock:
         if state.is_streaming:
             return jsonify({"status": "already_streaming"}), 400
-            
-        cmd = [
-            "ffmpeg", "-y",
-            "-f", "image2pipe",
-            "-vcodec", "mjpeg",
-            "-r", "25",
-            "-i", "-",
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-tune", "zerolatency",
-            "-b:v", "2M",
-            "-f", "rtsp",
-            "rtsp://localhost:8554/webcam"
-        ]
-        
-        try:
-            state.ffmpeg_proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+
+        params = dict(state.encoder_params)
+
+    try:
+        proc = _start_ffmpeg_process(params)
+        with state.lock:
+            state.ffmpeg_proc = proc
             state.is_streaming = True
-            log.info("[Stream] Started FFmpeg stream to MediaMTX on rtsp://localhost:8554/webcam")
-            return jsonify({"status": "started"}), 200
-        except Exception as e:
-            log.error("[Stream] Failed to start FFmpeg: %s", e)
-            return jsonify({"error": str(e)}), 500
+        log.info(
+            "[Stream] Started FFmpeg stream to MediaMTX on rtsp://localhost:8554/webcam "
+            "(%s, %dfps, %dkbps)",
+            params["resolution"],
+            params["fps"],
+            params["bitrate_kbps"],
+        )
+        return jsonify({"status": "started"}), 200
+    except Exception as e:
+        log.error("[Stream] Failed to start FFmpeg: %s", e)
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/stream/stop", methods=["POST"])
 def stream_stop():
     with state.lock:
         if not state.is_streaming or state.ffmpeg_proc is None:
             return jsonify({"status": "not_streaming"}), 400
-            
-        try:
-            state.ffmpeg_proc.stdin.close()
-            state.ffmpeg_proc.terminate()
-            state.ffmpeg_proc.wait(timeout=3)
-        except Exception as e:
-            log.warning("[Stream] Issue killing FFmpeg: %s", e)
-            if state.ffmpeg_proc:
-                state.ffmpeg_proc.kill()
-        finally:
-            state.is_streaming = False
-            state.ffmpeg_proc = None
-            log.info("[Stream] Stopped FFmpeg stream")
-            
-        return jsonify({"status": "stopped"}), 200
+
+        proc = state.ffmpeg_proc
+        state.is_streaming = False
+        state.ffmpeg_proc = None
+
+    _stop_ffmpeg_process(proc)
+    log.info("[Stream] Stopped FFmpeg stream")
+    return jsonify({"status": "stopped"}), 200
 
 
 @app.route("/metrics", methods=["GET"])
