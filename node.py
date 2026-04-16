@@ -72,6 +72,7 @@ TOPIC_SUBSCRIBE: str = "vms/node/+/importance"
 
 # ── Bandwidth ─────────────────────────────────────────────────────────────
 TOTAL_BANDWIDTH: float = float(os.environ.get("TOTAL_BANDWIDTH", "10.0"))  # Mbps
+MAX_COORDINATED_NODES: int = int(os.environ.get("MAX_COORDINATED_NODES", "3"))
 # 0.0 => pure fair-share, 1.0 => pure priority-share
 PRIORITY_WEIGHT: float = float(os.environ.get("PRIORITY_WEIGHT", "0.7"))
 
@@ -184,6 +185,22 @@ def _restart_stream_with_params(params: dict) -> None:
         )
     except Exception as exc:
         log.error("[Stream] Failed to reconfigure ffmpeg stream: %s", exc)
+
+
+def _person_bucket(person_count: int) -> int:
+    """Convert a raw person count into a priority bucket."""
+    if person_count <= 0:
+        return 0
+    if person_count == 1:
+        return 1
+    return 2
+
+
+def _scaled_display_size(frame_width: int, frame_height: int, params: dict) -> tuple[int, int]:
+    """Return the dashboard display size for the current encoder params."""
+    target_width = int(params.get("width", frame_width) or frame_width)
+    target_height = int(params.get("height", frame_height) or frame_height)
+    return max(1, target_width), max(1, target_height)
 # ===========================================================================
 # [B] SHARED STATE  (thread-safe via locks)
 # ===========================================================================
@@ -315,9 +332,27 @@ def video_processing_thread():
             continue
 
         frame_idx += 1
+
+        with state.lock:
+            encoder_params = dict(state.encoder_params)
+
+        display_width, display_height = _scaled_display_size(
+            frame.shape[1],
+            frame.shape[0],
+            encoder_params,
+        )
+
+        if (frame.shape[1], frame.shape[0]) != (display_width, display_height):
+            display_frame = cv2.resize(
+                frame,
+                (display_width, display_height),
+                interpolation=cv2.INTER_AREA,
+            )
+        else:
+            display_frame = frame
         
         # ── Encode Frame for Frontend MJPEG Stream ─────────────────────
-        ret_jpg, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        ret_jpg, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         frame_bytes = buffer.tobytes() if ret_jpg else b''
 
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -450,10 +485,12 @@ def mqtt_thread():
     while True:
         with state.lock:
             score = state.importance_score
+            person_count = state.person_count
 
         payload = json.dumps({
             "node_id":   NODE_ID,
             "importance": round(score, 6),
+            "person_count": int(person_count),
             "timestamp":  time.time(),
         })
         client.publish(TOPIC_PUBLISH, payload, qos=0, retain=False)
@@ -501,6 +538,19 @@ def _apply_encoder_params(quality: str):
     if restart_stream:
         _restart_stream_with_params(params)
 
+
+def _select_quality_tier(person_count: int, rank: int) -> str:
+    """Select the final quality tier for this node given its rank among active nodes."""
+    if person_count <= 0:
+        return "LOW"
+    if person_count == 1:
+        return "MEDIUM" if rank == 0 else "LOW"
+    if rank == 0:
+        return "HIGH"
+    if rank == 1:
+        return "MEDIUM"
+    return "LOW"
+
 def _prune_stale_peers() -> bool:
     """
     Remove peers that haven't published within NODE_TIMEOUT seconds.
@@ -544,38 +594,53 @@ def negotiation_thread():
         # ── 2. Collect scores ─────────────────────────────────────────
         with state.lock:
             my_score   = state.importance_score
+            my_person_count = state.person_count
             peer_data  = dict(state.peer_scores)  # shallow copy
 
-        all_scores = {NODE_ID: my_score}
-        all_scores.update({pid: v["importance"] for pid, v in peer_data.items()})
+        all_nodes = {
+            NODE_ID: {
+                "importance": my_score,
+                "person_count": my_person_count,
+            }
+        }
+        for pid, info in peer_data.items():
+            all_nodes[pid] = {
+                "importance": float(info.get("importance", 0.0)),
+                "person_count": int(info.get("person_count", 0)),
+            }
 
-        total_score = sum(all_scores.values())
-        node_count = max(len(all_scores), 1)
+        ranked_nodes = sorted(
+            all_nodes.items(),
+            key=lambda item: (
+                -_person_bucket(int(item[1]["person_count"])),
+                -float(item[1]["importance"]),
+                item[0],
+            ),
+        )[:max(1, MAX_COORDINATED_NODES)]
 
-        # ── 3. Calculate share ratio (hybrid fair-share + priority) ──
-        fair_ratio = 1.0 / node_count
-        if total_score == 0.0:
-            priority_ratio = fair_ratio
-        else:
-            priority_ratio = my_score / total_score
+        total_score = sum(node["importance"] for node in all_nodes.values())
+        node_count = len(ranked_nodes)
 
-        alpha = max(0.0, min(1.0, PRIORITY_WEIGHT))
-        my_share_ratio = ((1.0 - alpha) * fair_ratio) + (alpha * priority_ratio)
+        ranked_lookup = {node_id: rank for rank, (node_id, _) in enumerate(ranked_nodes)}
+        my_rank = ranked_lookup.get(NODE_ID, node_count)
+        new_quality = _select_quality_tier(my_person_count, my_rank)
 
-        # ── 4. Allocate bandwidth ─────────────────────────────────────
-        allocated = my_share_ratio * TOTAL_BANDWIDTH
+        if ranked_nodes and all(_person_bucket(int(node[1]["person_count"])) == 0 for node in ranked_nodes):
+            new_quality = "LOW"
+
+        params = QUALITY_TIERS[new_quality]
+        allocated = params["bitrate_kbps"] / 1000.0
 
         with state.lock:
             state.allocated_bandwidth = allocated
 
-        # ── 5. Quality adaptation ─────────────────────────────────────
-        new_quality = _resolve_quality(allocated)
-
         if new_quality != previous_quality:
             log.info(
-                "[Negotiation] share=%.2f%%  bw=%.2f Mbps  quality: %s → %s",
-                my_share_ratio * 100,
-                allocated,
+                "[Negotiation] nodes=%d  rank=%d  persons=%d  importance=%.4f  quality: %s → %s",
+                node_count,
+                my_rank + 1 if my_rank < node_count else 0,
+                my_person_count,
+                my_score,
                 previous_quality or "N/A",
                 new_quality,
             )
@@ -583,10 +648,12 @@ def negotiation_thread():
             previous_quality = new_quality
 
         log.debug(
-            "[Negotiation] nodes=%d  my_score=%.4f  total=%.4f  "
-            "share=%.2f%%  alloc=%.2f Mbps  quality=%s",
-            len(all_scores), my_score, total_score,
-            my_share_ratio * 100, allocated, new_quality,
+            "[Negotiation] nodes=%d  my_score=%.4f  total=%.4f  rank=%d  quality=%s",
+            len(all_nodes),
+            my_score,
+            total_score,
+            my_rank + 1 if my_rank < node_count else 0,
+            new_quality,
         )
 
 
@@ -622,6 +689,7 @@ def _build_status() -> dict:
             "resolution":          state.encoder_params.get("resolution", "N/A"),
             "bitrate_kbps":        state.encoder_params.get("bitrate_kbps", 0),
             "fps":                 state.encoder_params.get("fps", 0),
+            "max_nodes":           MAX_COORDINATED_NODES,
             "frame_count":         state.frame_count,
             "last_updated":        datetime.utcfromtimestamp(
                                        state.last_frame_ts

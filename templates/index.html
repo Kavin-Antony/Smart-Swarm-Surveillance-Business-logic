@@ -340,6 +340,8 @@
                 <div class="meta-item"><span>MQTT</span><strong id="meta-mqtt">-</strong></div>
                 <div class="meta-item"><span>Source</span><strong id="meta-source">-</strong></div>
                 <div class="meta-item"><span>Quality</span><strong id="meta-quality">-</strong></div>
+                <div class="meta-item"><span>Resolution</span><strong id="meta-resolution">-</strong></div>
+                <div class="meta-item"><span>Bitrate / FPS</span><strong id="meta-encoding">-</strong></div>
             </div>
 
             <div class="metrics-card">
@@ -506,7 +508,9 @@
                 document.getElementById('meta-node').textContent = data.node_id;
                 document.getElementById('meta-mqtt').textContent = `${data.mqtt_broker}:${data.mqtt_port}`;
                 document.getElementById('meta-source').textContent = `${data.source_type} (${data.stream_source})`;
-                document.getElementById('meta-quality').textContent = data.quality;
+                document.getElementById('meta-quality').textContent = `${data.quality} quality`;
+                document.getElementById('meta-resolution').textContent = data.resolution || '-';
+                document.getElementById('meta-encoding').textContent = `${Number(data.bitrate_kbps || 0).toFixed(0)} kbps · ${Number(data.fps || 0).toFixed(0)} fps`;
 
                 document.getElementById('val-persons').textContent = data.person_count;
                 document.getElementById('val-conf').textContent = Number(data.avg_confidence).toFixed(3);
