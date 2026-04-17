@@ -1,1 +1,16 @@
 mosquitto -v -c mosquitto-lan.conf
+
+
+mosquitto_sub -h 127.0.0.1 -p 1883 -t "#" -v
+
+
+mosquitto_sub -h <BROKER_LAN_IP> -p 1883 -t "#" -v
+
+
+mosquitto_sub -h 127.0.0.1 -p 1883 -t "#" -v -R
+
+
+mosquitto_sub -h 127.0.0.1 -p 1883 -t "#" -F "%I %t %p"
+
+
+rtsp://172.16.245.116/live/ch00_0

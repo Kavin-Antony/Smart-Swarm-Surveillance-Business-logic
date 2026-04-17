@@ -30,4 +30,7 @@ webrtcAddress: :8889
 paths:
   # Catch-all path setting
   all:
-    # Optional security configs can go here
+    
+  camera:
+    source: rtsp://172.16.245.116/live/ch00_1
+    sourceAnyPortEnable: yes

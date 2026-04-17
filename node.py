@@ -33,6 +33,7 @@ import json
 import logging
 import threading
 import subprocess
+from urllib.parse import urlparse
 from datetime import datetime
 
 # ===========================================================================
@@ -92,9 +93,9 @@ YOLO_CONF_THRESHOLD: float = 0.4
 
 # ── Streaming quality tiers ───────────────────────────────────────────────
 QUALITY_TIERS: dict = {
-    "LOW":    {"resolution": "480p",  "width": 854,  "height": 480,  "bitrate_kbps": 500,  "fps": 10},
-    "MEDIUM": {"resolution": "720p",  "width": 1280, "height": 720,  "bitrate_kbps": 1500, "fps": 20},
-    "HIGH":   {"resolution": "1080p", "width": 1920, "height": 1080, "bitrate_kbps": 4000, "fps": 30},
+    "LOW":    {"resolution": "480p",  "width": 854,  "height": 480,  "bitrate_kbps": 500,  "fps": 15},
+    "MEDIUM": {"resolution": "720p",  "width": 1280, "height": 720,  "bitrate_kbps": 1500, "fps": 15},
+    "HIGH":   {"resolution": "1080p", "width": 1920, "height": 1080, "bitrate_kbps": 4000, "fps": 15},
 }
 RTSP_EXPORT_BASE: str = os.environ.get("RTSP_EXPORT_BASE", "rtsp://localhost:8554").rstrip("/")
 RTSP_EXPORT_PATHS: dict = {
@@ -782,6 +783,19 @@ def api_start():
     rtsp_url = str(payload.get("rtsp_url", "")).strip()
     mqtt_port_val = payload.get("mqtt_port", MQTT_PORT)
 
+    # OpenCV cannot ingest WebRTC signaling/playback URLs directly.
+    # Keep UI compatibility by translating common MediaMTX WebRTC URLs to RTSP.
+    if source_type == "webrtc" and rtsp_url:
+        parsed = urlparse(rtsp_url)
+        if parsed.scheme in {"http", "https"} and parsed.hostname and parsed.port == 8889:
+            stream_path = parsed.path.rstrip("/") or "/camera"
+            rtsp_url = f"rtsp://{parsed.hostname}:8554{stream_path}"
+            log.warning(
+                "[Startup] WebRTC URL provided for OpenCV input; using RTSP URL instead: %s",
+                rtsp_url,
+            )
+        source_type = "rtsp"
+
     if not node_id:
         return jsonify({"ok": False, "error": "Node name is required."}), 400
     if not mqtt_broker:
@@ -797,7 +811,7 @@ def api_start():
     if source_type not in {"webcam", "rtsp", "webrtc"}:
         return jsonify({"ok": False, "error": "Source type must be webcam or rtsp/webrtc."}), 400
     if source_type in {"rtsp", "webrtc"} and not rtsp_url:
-        return jsonify({"ok": False, "error": "RTSP/WebRTC URL is required for stream mode."}), 400
+        return jsonify({"ok": False, "error": "Stream URL is required for RTSP/WebRTC mode."}), 400
 
     # Webcam page supports "start RTSP" by supplying a link.
     if source_type == "webcam" and rtsp_url:
