@@ -68,8 +68,10 @@ DETECTION_INTERVAL: int = int(os.environ.get("DETECTION_INTERVAL", "5"))
 MQTT_BROKER: str = os.environ.get("MQTT_BROKER", "localhost")
 MQTT_PORT: int = int(os.environ.get("MQTT_PORT", "1883"))
 MQTT_KEEPALIVE: int = 60
-TOPIC_PUBLISH: str = f"vms/node/{NODE_ID}/importance"
-TOPIC_SUBSCRIBE: str = "vms/node/+/importance"
+TOPIC_PUBLISH_IMPORTANCE: str = f"vms/node/{NODE_ID}/importance"
+TOPIC_PUBLISH_STATUS: str = f"vms/node/{NODE_ID}/status"
+TOPIC_SUBSCRIBE_IMPORTANCE: str = "vms/node/+/importance"
+TOPIC_SUBSCRIBE_STATUS: str = "vms/node/+/status"
 
 # ── Bandwidth ─────────────────────────────────────────────────────────────
 TOTAL_BANDWIDTH: float = float(os.environ.get("TOTAL_BANDWIDTH", "10.0"))  # Mbps
@@ -111,9 +113,12 @@ WORKERS_LOCK = threading.Lock()
 
 def _rebuild_topics() -> None:
     """Refresh MQTT topics when NODE_ID changes at runtime startup config."""
-    global TOPIC_PUBLISH, TOPIC_SUBSCRIBE
-    TOPIC_PUBLISH = f"vms/node/{NODE_ID}/importance"
-    TOPIC_SUBSCRIBE = "vms/node/+/importance"
+    global TOPIC_PUBLISH_IMPORTANCE, TOPIC_PUBLISH_STATUS
+    global TOPIC_SUBSCRIBE_IMPORTANCE, TOPIC_SUBSCRIBE_STATUS
+    TOPIC_PUBLISH_IMPORTANCE = f"vms/node/{NODE_ID}/importance"
+    TOPIC_PUBLISH_STATUS = f"vms/node/{NODE_ID}/status"
+    TOPIC_SUBSCRIBE_IMPORTANCE = "vms/node/+/importance"
+    TOPIC_SUBSCRIBE_STATUS = "vms/node/+/status"
 
 
 def _rtsp_url_for_quality(quality: str) -> str:
@@ -237,6 +242,8 @@ class SharedState:
 
         # ── Peer scores: {node_id: {"importance": float, "ts": float}} ─
         self.peer_scores: dict = {}
+        # ── Peer status: {node_id: {"quality": str, "allocated_bandwidth": float, ...}} ─
+        self.peer_statuses: dict = {}
 
         # ── Bandwidth allocation ───────────────────────────────────────
         self.allocated_bandwidth: float = TOTAL_BANDWIDTH  # Mbps
@@ -439,32 +446,57 @@ def video_processing_thread():
 def _on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         log.info("[MQTT] Connected to broker %s:%d", MQTT_BROKER, MQTT_PORT)
-        client.subscribe(TOPIC_SUBSCRIBE)
-        log.info("[MQTT] Subscribed → %s", TOPIC_SUBSCRIBE)
+        client.subscribe(TOPIC_SUBSCRIBE_IMPORTANCE)
+        client.subscribe(TOPIC_SUBSCRIBE_STATUS)
+        log.info("[MQTT] Subscribed → %s", TOPIC_SUBSCRIBE_IMPORTANCE)
+        log.info("[MQTT] Subscribed → %s", TOPIC_SUBSCRIBE_STATUS)
     else:
         log.error("[MQTT] Connection failed, rc=%d", rc)
 
 
 def _on_message(client, userdata, msg):
     """
-    Receive peer importance messages and update the peer scores dict.
+    Receive peer importance/status messages and update shared peer state.
     Stale nodes are pruned by the negotiation thread.
     """
     try:
         payload = json.loads(msg.payload.decode())
         peer_id = payload.get("node_id")
-        importance = float(payload.get("importance", 0.0))
-        person_count = int(payload.get("person_count", 0))
+        if not peer_id or peer_id == NODE_ID:
+            return
+
         ts = float(payload.get("timestamp", time.time()))
 
-        if peer_id and peer_id != NODE_ID:
+        if msg.topic.endswith("/importance"):
+            importance = float(payload.get("importance", 0.0))
+            person_count = int(payload.get("person_count", 0))
             with state.lock:
                 state.peer_scores[peer_id] = {
                     "importance": importance,
                     "person_count": person_count,
                     "ts": ts,
                 }
-            log.debug("[MQTT] Peer update: %s → %.4f", peer_id, importance)
+            log.debug("[MQTT] Peer importance: %s → %.4f", peer_id, importance)
+            return
+
+        if msg.topic.endswith("/status"):
+            quality = str(payload.get("quality", "LOW"))
+            allocated_bandwidth = float(payload.get("allocated_bandwidth", 0.0))
+            bitrate_kbps = int(payload.get("bitrate_kbps", 0))
+            with state.lock:
+                state.peer_statuses[peer_id] = {
+                    "quality": quality,
+                    "allocated_bandwidth": allocated_bandwidth,
+                    "bitrate_kbps": bitrate_kbps,
+                    "ts": ts,
+                }
+            log.debug(
+                "[MQTT] Peer status: %s → quality=%s bw=%.3f Mbps",
+                peer_id,
+                quality,
+                allocated_bandwidth,
+            )
+            return
 
     except Exception as exc:
         log.warning("[MQTT] Bad message on %s: %s", msg.topic, exc)
@@ -477,7 +509,7 @@ def _on_disconnect(client, userdata, rc, properties=None):
 def mqtt_thread():
     """
     MQTT communication thread.
-    Publishes own importance score at 1 Hz.
+    Publishes own importance and status at 1 Hz.
     """
     client = mqtt.Client(
         client_id=f"swarm-{NODE_ID}",
@@ -501,14 +533,28 @@ def mqtt_thread():
         with state.lock:
             score = state.importance_score
             person_count = state.person_count
+            quality = state.quality
+            allocated_bandwidth = state.allocated_bandwidth
+            bitrate_kbps = int(state.encoder_params.get("bitrate_kbps", 0))
 
-        payload = json.dumps({
+        ts_now = time.time()
+
+        payload_importance = json.dumps({
             "node_id":   NODE_ID,
             "importance": round(score, 6),
             "person_count": int(person_count),
-            "timestamp":  time.time(),
+            "timestamp":  ts_now,
         })
-        client.publish(TOPIC_PUBLISH, payload, qos=0, retain=False)
+        payload_status = json.dumps({
+            "node_id": NODE_ID,
+            "quality": quality,
+            "allocated_bandwidth": round(float(allocated_bandwidth), 4),
+            "bitrate_kbps": bitrate_kbps,
+            "timestamp": ts_now,
+        })
+
+        client.publish(TOPIC_PUBLISH_IMPORTANCE, payload_importance, qos=0, retain=False)
+        client.publish(TOPIC_PUBLISH_STATUS, payload_status, qos=0, retain=False)
         log.debug("[MQTT] Published importance=%.4f", score)
 
         time.sleep(1.0)
@@ -551,7 +597,7 @@ def _apply_encoder_params(quality: str):
 
 
 def _select_quality_tier(person_count: int, rank: int) -> str:
-    """Select the final quality tier for this node given its rank among active nodes."""
+    """Select the BASE quality tier for this node given its rank among active nodes."""
     if person_count <= 0:
         return "LOW"
     if person_count == 1:
@@ -561,6 +607,120 @@ def _select_quality_tier(person_count: int, rank: int) -> str:
     if rank == 1:
         return "MEDIUM"
     return "LOW"
+
+
+def _upgrade_tier(current_quality: str) -> str | None:
+    """
+    Return the next tier up, or None if already at max.
+    LOW → MEDIUM → HIGH → None
+    """
+    if current_quality == "LOW":
+        return "MEDIUM"
+    elif current_quality == "MEDIUM":
+        return "HIGH"
+    return None
+
+
+def _tier_cost_delta(from_tier: str, to_tier: str) -> float:
+    """
+    Return the additional bandwidth (kbps) needed to upgrade from one tier to another.
+    Used for upgrade phase budget accounting.
+    """
+    from_rate = QUALITY_TIERS[from_tier]["bitrate_kbps"]
+    to_rate = QUALITY_TIERS[to_tier]["bitrate_kbps"]
+    return max(0, to_rate - from_rate)
+
+
+def _allocate_bandwidth_multinode(
+    all_nodes: dict,
+    total_bandwidth_kbps: float,
+) -> dict[str, str]:
+    """
+    Allocate quality tiers to all nodes using 2-phase allocation:
+      Phase 1: Assign base tier to each node based on rank
+      Phase 2: Greedily upgrade nodes in rank order until bandwidth exhausted
+
+    Args:
+        all_nodes: {node_id: {"importance": float, "person_count": int}}
+        total_bandwidth_kbps: Total available bandwidth in kbps
+
+    Returns:
+        {node_id: final_quality_tier}
+    """
+    # ── Rank all nodes ───────────────────────────────────────────────
+    ranked_nodes = sorted(
+        all_nodes.items(),
+        key=lambda item: (
+            -_person_bucket(int(item[1]["person_count"])),
+            -float(item[1]["importance"]),
+            item[0],
+        ),
+    )
+
+    # ── Special case: all nodes have 0 people ───────────────────────
+    if ranked_nodes and all(_person_bucket(int(node[1]["person_count"])) == 0 for node in ranked_nodes):
+        return {node_id: "LOW" for node_id, _ in ranked_nodes}
+
+    # ── Phase 1: Assign base tier to each node ─────────────────────
+    node_qualities = {}
+    for rank, (node_id, node_data) in enumerate(ranked_nodes):
+        person_count = int(node_data["person_count"])
+        base_quality = _select_quality_tier(person_count, rank)
+        node_qualities[node_id] = base_quality
+
+    # ── Phase 2: Greedily upgrade nodes in rank order ───────────────
+    total_base_kbps = sum(
+        QUALITY_TIERS[node_qualities[node_id]]["bitrate_kbps"]
+        for node_id, _ in ranked_nodes
+    )
+
+    if total_base_kbps > total_bandwidth_kbps:
+        # Base allocation exceeds budget → fallback to base without upgrade
+        log.debug(
+            "[Bandwidth] Base allocation (%.1f Mbps) exceeds total (%.1f Mbps); no upgrades applied",
+            total_base_kbps / 1000.0,
+            total_bandwidth_kbps / 1000.0,
+        )
+        return node_qualities
+
+    remaining_kbps = total_bandwidth_kbps - total_base_kbps
+
+    for rank, (node_id, _) in enumerate(ranked_nodes):
+        current_quality = node_qualities[node_id]
+
+        # Try to upgrade this node as much as possible before moving to next
+        while True:
+            next_tier = _upgrade_tier(current_quality)
+            if next_tier is None:
+                # Already at HIGH
+                break
+
+            upgrade_cost = _tier_cost_delta(current_quality, next_tier)
+            if remaining_kbps >= upgrade_cost:
+                node_qualities[node_id] = next_tier
+                remaining_kbps -= upgrade_cost
+                current_quality = next_tier
+                log.debug(
+                    "[Upgrade] node=%s rank=%d  %s → %s  (cost=%.1f kbps, remaining=%.1f kbps)",
+                    node_id,
+                    rank + 1,
+                    current_quality.replace(next_tier, ""),  # old quality
+                    next_tier,
+                    upgrade_cost,
+                    remaining_kbps,
+                )
+            else:
+                # Not enough remaining for this upgrade, try next node
+                break
+
+    log.debug(
+        "[Bandwidth] Final allocation: total=%.1f Mbps, used=%.1f Mbps, remaining=%.1f Mbps",
+        total_bandwidth_kbps / 1000.0,
+        (total_bandwidth_kbps - remaining_kbps) / 1000.0,
+        remaining_kbps / 1000.0,
+    )
+
+    return node_qualities
 
 def _prune_stale_peers() -> bool:
     """
@@ -576,21 +736,33 @@ def _prune_stale_peers() -> bool:
         ]
         for pid in stale:
             del state.peer_scores[pid]
+            # Keep peer status map consistent with live peers.
+            state.peer_statuses.pop(pid, None)
             log.warning("[Negotiation] Peer timed out and removed: %s", pid)
             removed = True
+
+        stale_status_only = [
+            pid for pid, info in state.peer_statuses.items()
+            if now - float(info.get("ts", 0.0)) > NODE_TIMEOUT
+        ]
+        for pid in stale_status_only:
+            if pid not in state.peer_scores:
+                del state.peer_statuses[pid]
+                removed = True
     return removed
 
 
 def negotiation_thread():
     """
-    Decentralised bandwidth negotiation loop.
+    Decentralised bandwidth negotiation loop with multi-node upgrade support.
 
     Every 1 second:
       1. Prune stale peers.
-      2. Gather all scores (own + peers).
-      3. Compute my_share_ratio.
-      4. Allocate bandwidth.
-      5. Decide quality tier and update encoder if changed.
+      2. Gather all scores (own + peers) — NO node limit.
+      3. Rank all nodes by (person_bucket, importance, node_id).
+      4. Phase 1: Assign base tier to each node.
+      5. Phase 2: Greedily upgrade nodes in rank order until bandwidth exhausted.
+      6. Decide quality tier for this node and update encoder if changed.
 
     No central controller — each node independently runs this same logic.
     """
@@ -623,6 +795,7 @@ def negotiation_thread():
                 "person_count": int(info.get("person_count", 0)),
             }
 
+        # ── 3. Rank ALL nodes (no MAX_COORDINATED_NODES limit) ────────
         ranked_nodes = sorted(
             all_nodes.items(),
             key=lambda item: (
@@ -630,18 +803,22 @@ def negotiation_thread():
                 -float(item[1]["importance"]),
                 item[0],
             ),
-        )[:max(1, MAX_COORDINATED_NODES)]
+        )
 
-        total_score = sum(node["importance"] for node in all_nodes.values())
         node_count = len(ranked_nodes)
 
+        # Find my rank after sorting
         ranked_lookup = {node_id: rank for rank, (node_id, _) in enumerate(ranked_nodes)}
         my_rank = ranked_lookup.get(NODE_ID, node_count)
-        new_quality = _select_quality_tier(my_person_count, my_rank)
 
-        if ranked_nodes and all(_person_bucket(int(node[1]["person_count"])) == 0 for node in ranked_nodes):
-            new_quality = "LOW"
+        # ── 4 & 5. Allocate bandwidth (Phase 1 base + Phase 2 upgrade) ─
+        total_bandwidth_kbps = TOTAL_BANDWIDTH * 1000.0
+        node_qualities = _allocate_bandwidth_multinode(all_nodes, total_bandwidth_kbps)
 
+        # Get this node's assigned quality
+        new_quality = node_qualities.get(NODE_ID, "LOW")
+
+        # ── 6. Update state and apply hysteresis ──────────────────────
         params = QUALITY_TIERS[new_quality]
         allocated = params["bitrate_kbps"] / 1000.0
 
@@ -682,10 +859,9 @@ def negotiation_thread():
             last_switch_ts = now
 
         log.debug(
-            "[Negotiation] nodes=%d  my_score=%.4f  total=%.4f  rank=%d  quality=%s  candidate=%s(%d)",
-            len(all_nodes),
+            "[Negotiation] nodes=%d  my_score=%.4f  rank=%d  quality=%s  candidate=%s(%d)",
+            node_count,
             my_score,
-            total_score,
             my_rank + 1 if my_rank < node_count else 0,
             new_quality,
             candidate_quality or "-",
@@ -711,6 +887,15 @@ def _build_status() -> dict:
             pid: round(v["importance"], 6)
             for pid, v in state.peer_scores.items()
         }
+        peer_status_summary = {
+            pid: {
+                "quality": str(v.get("quality", "LOW")),
+                "allocated_bandwidth": round(float(v.get("allocated_bandwidth", 0.0)), 4),
+                "bitrate_kbps": int(v.get("bitrate_kbps", 0)),
+                "last_seen_ts": float(v.get("ts", 0.0)),
+            }
+            for pid, v in state.peer_statuses.items()
+        }
         return {
             "started":             state.started,
             "node_id":             NODE_ID,
@@ -719,6 +904,7 @@ def _build_status() -> dict:
             "avg_confidence":      round(state.avg_confidence, 4),
             "motion_factor":       round(state.motion_factor, 4),
             "peer_scores":         peer_summary,
+            "peer_statuses":       peer_status_summary,
             "peer_count":          len(peer_summary),
             "allocated_bandwidth": round(state.allocated_bandwidth, 4),
             "quality":             state.quality,
