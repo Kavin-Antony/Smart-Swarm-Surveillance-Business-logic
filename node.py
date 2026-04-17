@@ -74,7 +74,7 @@ TOPIC_SUBSCRIBE_IMPORTANCE: str = "vms/node/+/importance"
 TOPIC_SUBSCRIBE_STATUS: str = "vms/node/+/status"
 
 # ── Bandwidth ─────────────────────────────────────────────────────────────
-TOTAL_BANDWIDTH: float = float(os.environ.get("TOTAL_BANDWIDTH", "7.5.0"))  # Mbps
+TOTAL_BANDWIDTH: float = float(os.environ.get("TOTAL_BANDWIDTH", "7.5"))  # Mbps
 MAX_COORDINATED_NODES: int = int(os.environ.get("MAX_COORDINATED_NODES", "3"))
 # 0.0 => pure fair-share, 1.0 => pure priority-share
 PRIORITY_WEIGHT: float = float(os.environ.get("PRIORITY_WEIGHT", "0.7"))
