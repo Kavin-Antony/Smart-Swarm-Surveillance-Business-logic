@@ -405,6 +405,7 @@
 
         let started = false;
         let lastBoxesStr = "";
+        let currentResolution = "";
 
         function updateSourceFields() {
             const mode = sourceTypeSelect.value;
@@ -543,6 +544,11 @@
                 document.getElementById('meta-encoding').textContent = `${Number(data.bitrate_kbps || 0).toFixed(0)} kbps · ${Number(data.fps || 0).toFixed(0)} fps`;
                 badgeResolution.textContent = data.resolution || '-';
                 badgeFps.textContent = `${Number(data.fps || 0).toFixed(0)} fps`;
+
+                if (currentResolution && currentResolution !== data.resolution) {
+                    videoElement.src = `/video_feed?ts=${Date.now()}`;
+                }
+                currentResolution = data.resolution;
 
                 document.getElementById('val-persons').textContent = data.person_count;
                 document.getElementById('val-conf').textContent = Number(data.avg_confidence).toFixed(3);

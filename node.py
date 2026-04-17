@@ -81,8 +81,8 @@ PRIORITY_WEIGHT: float = float(os.environ.get("PRIORITY_WEIGHT", "0.7"))
 
 # ── Fault Tolerance ───────────────────────────────────────────────────────
 NODE_TIMEOUT: float = float(os.environ.get("NODE_TIMEOUT", "8.0"))   # seconds
-QUALITY_CONFIRM_TICKS: int = int(os.environ.get("QUALITY_CONFIRM_TICKS", "2"))
-MIN_QUALITY_HOLD_SEC: float = float(os.environ.get("MIN_QUALITY_HOLD_SEC", "4.0"))
+QUALITY_CONFIRM_TICKS: int = int(os.environ.get("QUALITY_CONFIRM_TICKS", "1"))
+MIN_QUALITY_HOLD_SEC: float = float(os.environ.get("MIN_QUALITY_HOLD_SEC", "2.0"))
 
 # ── Flask ─────────────────────────────────────────────────────────────────
 FLASK_PORT: int = int(os.environ.get("FLASK_PORT", "5001"))
@@ -557,7 +557,7 @@ def mqtt_thread():
         client.publish(TOPIC_PUBLISH_STATUS, payload_status, qos=0, retain=False)
         log.debug("[MQTT] Published importance=%.4f", score)
 
-        time.sleep(1.0)
+        time.sleep(2.0)
 
 
 # ===========================================================================
@@ -772,7 +772,7 @@ def negotiation_thread():
     last_switch_ts: float = 0.0
 
     while True:
-        time.sleep(1.0)
+        time.sleep(2.0)
 
         # ── 1. Prune timed-out peers ──────────────────────────────────
         _prune_stale_peers()
