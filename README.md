@@ -55,13 +55,21 @@ devenv shell
 setup
 ```
 
-### Step 3 — Choose ONE laptop as MQTT broker
+### Step 3 — Start one MQTT broker before running any node
 
 ```bash
 # On the broker laptop only:
 mosquitto -d -p 1883
 # or with config:
 mosquitto -c /etc/mosquitto/mosquitto.conf -d
+```
+
+Every node needs a reachable MQTT broker before `run` starts. You only need one broker for the whole LAN, but all laptops must point to that same broker IP.
+
+To verify the broker is alive, you can check that port `1883` is open or subscribe to a topic in another terminal:
+
+```bash
+mosquitto_sub -h <broker-ip> -t 'vms/node/+/importance' -v
 ```
 
 > All laptops must be on the **same Wi-Fi / LAN**.
@@ -90,6 +98,19 @@ run
 ```
 
 The `run` script automatically loads `.env` if present.
+
+### Step 6 — Check that the node is working
+
+When `run` is active, the node starts a Flask app on `FLASK_PORT` and exposes these checks:
+
+```bash
+curl http://localhost:5001/health
+curl http://localhost:5001/api/status
+```
+
+If the node is healthy, `/health` returns JSON with `status: "ok"` and `started: true`.
+
+You can also open the dashboard at `http://localhost:5001/` in a browser and confirm that the status panel updates.
 
 ---
 
